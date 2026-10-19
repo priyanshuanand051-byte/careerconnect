@@ -1,379 +1,552 @@
-import Login from './components/Login';
 import { useEffect, useMemo, useState } from 'react';
-import { getJobs } from './api';
+import Navbar from './components/Navbar';
+import Login from './components/Login';
+import Register from './components/Register';
 import JobDetails from './components/JobDetails';
-import './App.css';
 import RecruiterDashboard from './components/RecruiterDashboard';
+import MyApplications from './components/MyApplications';
+import { getJobs, getCurrentUser, clearCurrentUser } from './api';
+import './App.css';
 
 function App() {
-  const [jobs, setJobs] = useState([]);
-  const [searchText, setSearchText] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [showLogin, setShowLogin] = useState(false);
-  const [showRecruiterDashboard, setShowRecruiterDashboard] = useState(false);
-  const [error, setError] = useState('');
+  const [currentUser, setCurrentUser] = useState(() => getCurrentUser());
+  const [currentView, setCurrentView] = useState('home'); // 'home' | 'details' | 'recruiter-dashboard' | 'my-applications' | 'login' | 'register'
   const [selectedJob, setSelectedJob] = useState(null);
 
-  // Fetch jobs from the Spring Boot backend
-  useEffect(() => {
-    let cancelled = false;
+  // Job data states
+  const [jobs, setJobs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-    async function loadJobs() {
+  // Search & filter states
+  const [searchText, setSearchText] = useState('');
+  const [selectedType, setSelectedType] = useState('ALL');
+  const [locationFilter, setLocationFilter] = useState('');
+
+  // Toast notification
+  const [toast, setToast] = useState('');
+
+  function triggerToast(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(''), 4000);
+  }
+
+  // Load jobs from the Spring Boot API
+  async function reloadJobs() {
+    setLoading(true);
+    try {
+      const data = await getJobs();
+      setJobs(Array.isArray(data) ? data : []);
+      setError('');
+    } catch (err) {
+      console.error('Error fetching jobs:', err);
+      setError(
+        'Could not load jobs from backend. Ensure Spring Boot is running on http://localhost:8080.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function fetchJobs() {
       try {
         const data = await getJobs();
-
-        if (!cancelled) {
-          setJobs(data);
+        if (!ignore) {
+          setJobs(Array.isArray(data) ? data : []);
           setError('');
         }
       } catch (err) {
-        console.error('Error loading jobs:', err);
-
-        if (!cancelled) {
+        console.error('Error fetching jobs:', err);
+        if (!ignore) {
           setError(
-            'Could not load jobs. Check that Spring Boot is running and the API is accessible.'
+            'Could not load jobs from backend. Ensure Spring Boot is running on http://localhost:8080.'
           );
         }
       } finally {
-        if (!cancelled) {
+        if (!ignore) {
           setLoading(false);
         }
       }
     }
 
-    loadJobs();
+    fetchJobs();
 
     return () => {
-      cancelled = true;
+      ignore = true;
     };
   }, []);
 
-  // Filter jobs using the search input
+  // Filter jobs based on search keyword, job type, and location
   const filteredJobs = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
-
-    if (!keyword) {
-      return jobs;
-    }
+    const loc = locationFilter.trim().toLowerCase();
 
     return jobs.filter((job) => {
-      const searchableText = [
-        job.title,
-        job.companyName,
-        job.location,
-        job.jobType,
-        job.description,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
+      // 1. Keyword match
+      if (keyword) {
+        const fullContent = [
+          job.title,
+          job.companyName,
+          job.location,
+          job.jobType,
+          job.description,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
 
-      return searchableText.includes(keyword);
-    });
-  }, [jobs, searchText]);
-
-  // Show the Login page
-if (showLogin) {
-  return (
-    <div className="app">
-      <Login
-        onBack={() => setShowLogin(false)}
-        onRegister={() => alert('Registration page will be added next.')}
-      />
-    </div>
-  );
-}
-
-// Show the Recruiter Dashboard
-if (showRecruiterDashboard) {
-  return (
-    <div className="app">
-      <RecruiterDashboard
-        onBack={() => setShowRecruiterDashboard(false)}
-        onPostJob={() =>
-          alert('The Post a Job form will be added next.')
+        if (!fullContent.includes(keyword)) {
+          return false;
         }
-      />
-    </div>
-  );
-}
+      }
 
-  // Show the selected job's details page
-  if (selectedJob) {
-    return (
-      <div className="app">
-        <header className="navbar">
-          <a
-            className="brand"
-            href="#"
-            onClick={(event) => {
-              event.preventDefault();
-              setSelectedJob(null);
-            }}
-          >
-            Career<span>Connect</span>
-          </a>
+      // 2. Job Type filter
+      if (selectedType !== 'ALL') {
+        const typeStr = (job.jobType || '').toLowerCase();
+        if (!typeStr.includes(selectedType.toLowerCase())) {
+          return false;
+        }
+      }
 
-          <nav className="nav-links">
-            <a
-              href="#jobs"
-              onClick={(event) => {
-                event.preventDefault();
-                setSelectedJob(null);
-              }}
-            >
-              Find Jobs
-            </a>
-          </nav>
-        </header>
+      // 3. Location filter
+      if (loc) {
+        const jobLoc = (job.location || '').toLowerCase();
+        if (!jobLoc.includes(loc)) {
+          return false;
+        }
+      }
 
-        <JobDetails
-          job={selectedJob}
-          onBack={() => setSelectedJob(null)}
-        />
-      </div>
-    );
+      return true;
+    });
+  }, [jobs, searchText, selectedType, locationFilter]);
+
+  // Auth Handlers
+  function handleLoginSuccess(user) {
+    setCurrentUser(user);
+    triggerToast(`Welcome back, ${user.name || user.email}!`);
+    if (user.role === 'RECRUITER') {
+      setCurrentView('recruiter-dashboard');
+    } else {
+      setCurrentView('home');
+    }
   }
 
-  // Main homepage
+  function handleLogout() {
+    clearCurrentUser();
+    setCurrentUser(null);
+    triggerToast('You have been signed out.');
+    setCurrentView('home');
+  }
+
+  function handleViewJob(job) {
+    setSelectedJob(job);
+    setCurrentView('details');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   return (
     <div className="app">
-      <header className="navbar">
-        <a className="brand" href="#">
-          Career<span>Connect</span>
-        </a>
-
-        <nav className="nav-links">
-          <a href="#jobs">Find Jobs</a>
-          <a href="#how-it-works">How It Works</a>
-        </nav>
-
-        <div className="nav-actions">
-
-          <button
-                className="login-btn"
-                onClick={() => setShowRecruiterDashboard(true)}
-              >
-                Recruiter Dashboard
-           </button>
-          <button
-              className="login-btn"
-              onClick={() => setShowLogin(true)}
-            >
-              Login
-          </button>
-
-          <button
-            className="signup-btn"
-            onClick={() => alert('Registration page will be added next.')}
-          >
-            Get Started
-          </button>
+      {/* Toast popup */}
+      {toast && (
+        <div className="toast-notification" role="status">
+          ✓ {toast}
         </div>
-      </header>
+      )}
 
-      <main>
-        <section className="hero">
-          <div className="hero-content">
-            <p className="eyebrow">
-              YOUR NEXT OPPORTUNITY STARTS HERE
-            </p>
+      {/* Global Header */}
+      <Navbar
+        currentUser={currentUser}
+        currentView={currentView}
+        onNavigate={(view) => {
+          if (view === 'home') setSelectedJob(null);
+          setCurrentView(view);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onLogout={handleLogout}
+        onOpenPostJob={() => {
+          setCurrentView('recruiter-dashboard');
+        }}
+      />
 
-            <h1>
-              Build your future.
-              <br />
-              Find your <span>opportunity.</span>
-            </h1>
+      {/* VIEW: LOGIN */}
+      {currentView === 'login' && (
+        <Login
+          onBack={() => setCurrentView('home')}
+          onRegister={() => setCurrentView('register')}
+          onLoginSuccess={handleLoginSuccess}
+        />
+      )}
 
-            <p className="hero-description">
-              Discover jobs and internships that match your skills.
-              Take the next step in your career with CareerConnect.
-            </p>
+      {/* VIEW: REGISTER */}
+      {currentView === 'register' && (
+        <Register
+          onBack={() => setCurrentView('home')}
+          onLoginClick={() => setCurrentView('login')}
+        />
+      )}
 
-            <form
-              className="search-box"
-              onSubmit={(event) => {
-                event.preventDefault();
+      {/* VIEW: RECRUITER DASHBOARD */}
+      {currentView === 'recruiter-dashboard' && (
+        <RecruiterDashboard
+          currentUser={currentUser}
+          onBack={() => setCurrentView('home')}
+          onRequireLogin={() => setCurrentView('login')}
+        />
+      )}
 
-                document.getElementById('jobs')?.scrollIntoView({
-                  behavior: 'smooth',
-                });
-              }}
-            >
-              <span className="search-icon">⌕</span>
+      {/* VIEW: STUDENT APPLICATIONS */}
+      {currentView === 'my-applications' && (
+        <MyApplications
+          currentUser={currentUser}
+          onBack={() => setCurrentView('home')}
+          onSelectJob={handleViewJob}
+          onRequireLogin={() => setCurrentView('login')}
+        />
+      )}
 
-              <input
-                type="search"
-                aria-label="Search jobs"
-                placeholder="Job title, company or location"
-                value={searchText}
-                onChange={(event) => setSearchText(event.target.value)}
-              />
+      {/* VIEW: JOB DETAILS */}
+      {currentView === 'details' && selectedJob && (
+        <JobDetails
+          job={selectedJob}
+          currentUser={currentUser}
+          onBack={() => {
+            setSelectedJob(null);
+            setCurrentView('home');
+          }}
+          onRequireLogin={() => setCurrentView('login')}
+          onViewApplications={() => setCurrentView('my-applications')}
+        />
+      )}
 
-              <button type="submit">Search Jobs</button>
-            </form>
+      {/* VIEW: HOMEPAGE */}
+      {currentView === 'home' && (
+        <main>
+          {/* Hero Banner */}
+          <section className="hero">
+            <div className="hero-inner">
+              <div className="hero-text-area">
+                <span className="eyebrow">✦ YOUR NEXT OPPORTUNITY STARTS HERE</span>
 
-            <p className="hero-note">
-              Opportunities for students, freshers and professionals.
-            </p>
-          </div>
+                <h1>
+                  Build your career.
+                  <br />
+                  Find your <span>opportunity.</span>
+                </h1>
 
-          <div className="hero-decoration">
-            <div className="floating-card top-card">
-              <span className="card-icon">✦</span>
+                <p className="hero-description">
+                  Discover verified jobs, internships, and remote roles. Connect directly with hiring
+                  managers and recruiters with CareerConnect.
+                </p>
+
+                {/* Hero Multi-Field Search Form */}
+                <div className="hero-search-wrapper">
+                  <form
+                    className="hero-search-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      document.getElementById('jobs')?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                  >
+                    <div className="search-input-group">
+                      <span>🔍</span>
+                      <input
+                        type="search"
+                        placeholder="Job title, role, or keywords"
+                        value={searchText}
+                        onChange={(e) => setSearchText(e.target.value)}
+                        aria-label="Search by job title or keyword"
+                      />
+                    </div>
+
+                    <div className="search-divider" />
+
+                    <div className="search-input-group">
+                      <span>📍</span>
+                      <input
+                        type="text"
+                        placeholder="City or Remote"
+                        value={locationFilter}
+                        onChange={(e) => setLocationFilter(e.target.value)}
+                        aria-label="Filter by location"
+                      />
+                    </div>
+
+                    <button type="submit" className="btn-primary">
+                      Search Jobs
+                    </button>
+                  </form>
+                </div>
+
+                <div className="hero-metrics">
+                  <div className="metric-item">
+                    <span>⚡</span>
+                    <span><strong>{jobs.length}</strong> Opportunities active</span>
+                  </div>
+                  <div className="metric-item">
+                    <span>🔒</span>
+                    <span><strong>100%</strong> Verified recruiters</span>
+                  </div>
+                  <div className="metric-item">
+                    <span>🚀</span>
+                    <span>Direct Spring Boot API</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Hero Graphic Decorative Illustration */}
+              <div className="hero-graphic" aria-hidden="true">
+                <div className="float-chip chip-top">
+                  <span>✦</span>
+                  <div>
+                    <span style={{ fontSize: '11px', color: '#64748b' }}>HIRING NOW</span>
+                    <div>Top Tech Roles</div>
+                  </div>
+                </div>
+
+                <div className="graphic-card">
+                  <div className="graphic-card-header">
+                    <div className="graphic-avatar">CC</div>
+                    <div>
+                      <strong style={{ fontSize: '16px', display: 'block' }}>CareerConnect</strong>
+                      <span style={{ fontSize: '13px', color: '#64748b' }}>Hiring Platform</span>
+                    </div>
+                  </div>
+
+                  <div className="graphic-badge-row">
+                    <span className="badge badge-live">● Live Backend</span>
+                    <span className="badge">Spring Boot</span>
+                    <span className="badge">MySQL</span>
+                  </div>
+
+                  <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
+                    Connect talented students and ambitious professionals with premier companies.
+                  </p>
+                </div>
+
+                <div className="float-chip chip-bottom">
+                  <span>✓</span>
+                  <div>
+                    <span style={{ fontSize: '11px', color: '#64748b' }}>STATUS</span>
+                    <div>Fast Applications</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Job Postings Explorer */}
+          <section className="jobs-section" id="jobs">
+            <div className="section-heading">
               <div>
-                <strong>New opportunities</strong>
-                <p>Your next step awaits</p>
+                <p className="eyebrow">EXPLORE OPPORTUNITIES</p>
+                <h2>Available Positions</h2>
+                <p className="section-description">
+                  Discover your ideal role and take the next step in your professional journey.
+                </p>
+              </div>
+
+              <span className="job-count-badge">
+                {loading
+                  ? 'Loading...'
+                  : `${filteredJobs.length} ${filteredJobs.length === 1 ? 'position' : 'positions'} found`}
+              </span>
+            </div>
+
+            {/* Filter Pills Bar */}
+            <div className="filter-bar">
+              <div className="filter-pills" role="tablist" aria-label="Job type filter">
+                {['ALL', 'Full-time', 'Internship', 'Remote', 'Part-time', 'Contract'].map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    role="tab"
+                    aria-selected={selectedType === type}
+                    className={`filter-pill ${selectedType === type ? 'active' : ''}`}
+                    onClick={() => setSelectedType(type)}
+                  >
+                    {type === 'ALL' ? 'All Roles' : type}
+                  </button>
+                ))}
+              </div>
+
+              {(searchText || locationFilter || selectedType !== 'ALL') && (
+                <button
+                  type="button"
+                  className="link-btn"
+                  style={{ fontSize: '13px' }}
+                  onClick={() => {
+                    setSearchText('');
+                    setLocationFilter('');
+                    setSelectedType('ALL');
+                  }}
+                >
+                  Clear all filters
+                </button>
+              )}
+            </div>
+
+            {/* Loading State */}
+            {loading && (
+              <div className="message-card">
+                <p>Loading active job listings from CareerConnect...</p>
+              </div>
+            )}
+
+            {/* Error State */}
+            {!loading && error && (
+              <div className="message-card">
+                <div style={{ fontSize: '36px', marginBottom: '10px' }}>⚠️</div>
+                <h3>Unable to connect to the backend</h3>
+                <p style={{ marginBottom: '18px' }}>{error}</p>
+                <button className="btn-primary" onClick={reloadJobs}>
+                  Retry Connection
+                </button>
+              </div>
+            )}
+
+            {/* Empty State */}
+            {!loading && !error && filteredJobs.length === 0 && (
+              <div className="message-card">
+                <div style={{ fontSize: '36px', marginBottom: '10px' }}>🔍</div>
+                <h3>
+                  {jobs.length === 0
+                    ? 'No jobs available in the database yet'
+                    : 'No matching jobs found'}
+                </h3>
+                <p>
+                  {jobs.length === 0
+                    ? 'Switch to the Recruiter Dashboard to publish your first job opportunity!'
+                    : 'Try broadening your search keywords or clearing your filters.'}
+                </p>
+                {jobs.length === 0 ? (
+                  <button
+                    className="btn-primary"
+                    style={{ marginTop: '16px' }}
+                    onClick={() => setCurrentView('recruiter-dashboard')}
+                  >
+                    Go to Recruiter Dashboard
+                  </button>
+                ) : (
+                  <button
+                    className="btn-outline"
+                    style={{ marginTop: '16px' }}
+                    onClick={() => {
+                      setSearchText('');
+                      setLocationFilter('');
+                      setSelectedType('ALL');
+                    }}
+                  >
+                    Reset Filters
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Jobs Grid */}
+            {!loading && !error && filteredJobs.length > 0 && (
+              <div className="job-list">
+                {filteredJobs.map((job) => {
+                  const initial = (job.companyName || 'C').charAt(0).toUpperCase();
+
+                  return (
+                    <article className="job-card" key={job.id}>
+                      <div>
+                        <div className="job-card-header">
+                          <div className="company-logo">{initial}</div>
+                          <div className="job-card-title-group">
+                            <span className="job-type-pill">{job.jobType || 'Opportunity'}</span>
+                            <h3>{job.title || 'Untitled Position'}</h3>
+                            <p className="company-name">
+                              {job.companyName || 'Company not specified'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="job-meta-row">
+                          {job.location && <span>📍 {job.location}</span>}
+                          {job.recruiter?.name && <span>👤 {job.recruiter.name}</span>}
+                        </div>
+
+                        {job.description && (
+                          <p className="job-description-excerpt">{job.description}</p>
+                        )}
+                      </div>
+
+                      <div className="job-card-footer">
+                        <span className="job-id-pill">ID #{job.id}</span>
+                        <button
+                          type="button"
+                          className="btn-primary-sm"
+                          onClick={() => handleViewJob(job)}
+                        >
+                          View opportunity →
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* How It Works Section */}
+          <section className="how-section" id="how-it-works">
+            <div className="how-container">
+              <span className="eyebrow">SIMPLE. CLEAR. CAREER-FOCUSED.</span>
+              <h2>Your next step starts with three simple actions</h2>
+
+              <div className="steps-grid">
+                <article className="step-card">
+                  <span className="step-number">01</span>
+                  <h3>Explore</h3>
+                  <p>
+                    Browse through curated jobs and internships tailored for students, freshers, and
+                    seasoned professionals.
+                  </p>
+                </article>
+
+                <article className="step-card">
+                  <span className="step-number">02</span>
+                  <h3>Apply</h3>
+                  <p>
+                    Submit your application in seconds directly to hiring recruiters with your
+                    portfolio and qualifications.
+                  </p>
+                </article>
+
+                <article className="step-card">
+                  <span className="step-number">03</span>
+                  <h3>Grow</h3>
+                  <p>
+                    Track the real-time status of your applications and accelerate your professional
+                    career growth.
+                  </p>
+                </article>
               </div>
             </div>
+          </section>
+        </main>
+      )}
 
-            <div className="illustration">
-              <div className="illustration-circle">
-                <span>CC</span>
-              </div>
-              <div className="illustration-base" />
-            </div>
-
-            <div className="floating-card bottom-card">
-              <span className="check-icon">✓</span>
-              <div>
-                <strong>Career growth</strong>
-                <p>One step at a time</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="jobs-section" id="jobs">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">EXPLORE OPPORTUNITIES</p>
-              <h2>Available jobs</h2>
-              <p className="section-description">
-                Find a role where your skills can make a difference.
-              </p>
-            </div>
-
-            <span className="job-count">
-              {loading
-                ? 'Loading...'
-                : `${filteredJobs.length} ${
-                    filteredJobs.length === 1 ? 'job' : 'jobs'
-                  }`}
+      {/* Global Footer */}
+      <footer className="footer">
+        <div className="footer-inner">
+          <div className="brand">
+            <div className="brand-icon">CC</div>
+            <span>
+              Career<span className="brand-accent">Connect</span>
             </span>
           </div>
 
-          {loading && (
-            <div className="message-card">
-              <p>Loading jobs from CareerConnect...</p>
-            </div>
-          )}
+          <p className="footer-copy">
+            Connecting talent with opportunity. Powered by Spring Boot REST API & MySQL.
+          </p>
 
-          {!loading && error && (
-            <div className="message-card error-message" role="alert">
-              <p>{error}</p>
-
-              <button
-                className="apply-btn"
-                onClick={() => window.location.reload()}
-              >
-                Try again
-              </button>
-            </div>
-          )}
-
-          {!loading && !error && filteredJobs.length === 0 && (
-            <div className="message-card">
-              <h3>
-                {jobs.length === 0
-                  ? 'No jobs available yet'
-                  : 'No matching jobs found'}
-              </h3>
-
-              <p>
-                {jobs.length === 0
-                  ? 'Recruiter job postings will appear here.'
-                  : 'Try another job title, company or location.'}
-              </p>
-            </div>
-          )}
-
-          {!loading && !error && filteredJobs.length > 0 && (
-            <div className="job-list">
-              {filteredJobs.map((job) => (
-                <article className="job-card" key={job.id}>
-                  <div className="company-logo">
-                    {(job.companyName || 'C').charAt(0).toUpperCase()}
-                  </div>
-
-                  <div className="job-details">
-                    <span className="job-type">
-                      {job.jobType || 'Opportunity'}
-                    </span>
-
-                    <h3>{job.title || 'Untitled position'}</h3>
-
-                    <p className="company-name">
-                      {job.companyName || 'Company not specified'}
-                    </p>
-
-                    <div className="job-meta">
-                      {job.location && <span>⌖ {job.location}</span>}
-                    </div>
-
-                    {job.description && (
-                      <p className="job-description">
-                        {job.description}
-                      </p>
-                    )}
-                  </div>
-
-                  <button
-                    className="apply-btn"
-                    onClick={() => setSelectedJob(job)}
-                  >
-                    View opportunity →
-                  </button>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="how-section" id="how-it-works">
-          <p className="eyebrow">SIMPLE. CLEAR. CAREER-FOCUSED.</p>
-
-          <h2>Your next step starts with three actions.</h2>
-
-          <div className="steps">
-            <article>
-              <span>01</span>
-              <h3>Explore</h3>
-              <p>Discover opportunities that match your interests.</p>
-            </article>
-
-            <article>
-              <span>02</span>
-              <h3>Apply</h3>
-              <p>Take the next step toward the role you want.</p>
-            </article>
-
-            <article>
-              <span>03</span>
-              <h3>Grow</h3>
-              <p>Build experience and move your career forward.</p>
-            </article>
-          </div>
-        </section>
-      </main>
-
-      <footer className="footer">
-        <a className="brand" href="#">
-          Career<span>Connect</span>
-        </a>
-
-        <p>Connecting talent with opportunity.</p>
-        <p>© 2026 CareerConnect</p>
+          <p className="footer-copy">© 2026 CareerConnect. All rights reserved.</p>
+        </div>
       </footer>
     </div>
   );
